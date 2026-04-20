@@ -1,7 +1,6 @@
 import telebot
 import requests
 import time
-import random
 from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ========== 
@@ -24,108 +23,68 @@ state = {
     "live_msg_id": None, 
     "predictions_memory": {}, 
     "processed_periods": set(),
-    "current_prediction": {"period_full": None, "block": None, "side": None, "conf": 0, "note": "Processing..."},
-    "current_active_method": "P1"  # Default active method from JS
+    "current_prediction": {"period_full": None, "block": None, "side": None, "conf": 0, "note": "Processing..."}
 }
 
 # --- ၀။ TIMEZONE UTILS ---
 def get_mm_time():
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
-# --- ၁။ MAIN ALGORITHM (Pro-WinGo AI Friend Strategy L3) ---
+# --- ၁။ MAIN ALGORITHM (Custom Math Logic) ---
 
-def get_last_two_digits(issue_string):
-    try:
-        return int(str(issue_string)[-2:])
-    except (ValueError, TypeError):
-        return 0
-
-def is_even(number):
-    return number % 2 == 0
-
-def calculate_p1_size(intermediate_p1_result, is_target_even):
-    is_int_even = is_even(intermediate_p1_result)
-    
-    if not is_target_even:
-        # Target is ODD. Rule 1: If IntResult EVEN -> BIG, ODD -> SMALL
-        return "BIG" if is_int_even else "SMALL"
-    else:
-        # Target is EVEN. Rule 3: If IntResult EVEN -> SMALL, ODD -> BIG
-        return "SMALL" if is_int_even else "BIG"
-
-def get_calculated_p1_p2_sizes(target_issue, context_issue, context_outcome_num):
-    last_2_context = get_last_two_digits(context_issue)
-    outcome = int(context_outcome_num)
-    
-    # Intermediate P1 Result = (Last 2 digits of context) - (Outcome)
-    intermediate_result = last_2_context - outcome
-    
-    last_2_target = get_last_two_digits(target_issue)
-    is_target_even = is_even(last_2_target)
-    
-    p1_size = calculate_p1_size(intermediate_result, is_target_even)
-    p2_size = "SMALL" if p1_size == "BIG" else "BIG"
-    
-    return p1_size, p2_size
-
-def algo_friend_strategy(history_list, next_period):
+def algo_custom_math(history_list):
     """
-    JS ထဲက _generateFriendStrategyPrediction အတိုင်း အတိအကျ ရေးသားထားခြင်း
+    User တောင်းဆိုထားသော တွက်နည်းအတိုင်း တွက်ချက်ခြင်း:
+    - n1 = အပေါ်ဆုံးကဏန်း
+    - n5 = ၅ ခုမြောက်ကဏန်း
+    - n10 = အောက်ဆုံးကဏန်း (၁၀ ခုမြောက်)
     """
-    if not history_list:
-        return None
-        
-    latest_completed = history_list[0]
-    actual_outcome_num = int(latest_completed['number'])
-    actual_outcome_size = "BIG" if actual_outcome_num >= 5 else "SMALL"
+    if len(history_list) < 10:
+        return None, "Not enough data (Need 10 results)"
     
-    # Evaluate previous round winner to switch method if needed
-    if len(history_list) >= 2:
-        context_eval = history_list[1]
-        eval_outcome_num = int(context_eval['number'])
-        
-        past_p1, past_p2 = get_calculated_p1_p2_sizes(
-            latest_completed['issueNumber'],
-            context_eval['issueNumber'],
-            eval_outcome_num
-        )
-        
-        predicted_last_round = past_p1 if state["current_active_method"] == 'P1' else past_p2
-        
-        if predicted_last_round != actual_outcome_size:
-            # Active method was WRONG. Switch it!
-            state["current_active_method"] = 'P2' if state["current_active_method"] == 'P1' else 'P1'
+    # ဂဏန်းများဆွဲထုတ်ခြင်း
+    n1 = int(history_list[0]['number'])
+    n5 = int(history_list[4]['number'])
+    n10 = int(history_list[9]['number'])
     
-    # Generate prediction for upcoming period
-    up_p1, up_p2 = get_calculated_p1_p2_sizes(
-        next_period,
-        latest_completed['issueNumber'],
-        actual_outcome_num
-    )
+    # တွက်ချက်ခြင်း
+    calc1 = n5 + 9
+    calc2 = n1 + n10
     
-    final_predicted_size = up_p1 if state["current_active_method"] == 'P1' else up_p2
-    return final_predicted_size
+    # အချင်းချင်းနှုတ်ခြင်း (အနှုတ်မထွက်အောင် abs ခံထားသည်)
+    diff = abs(calc1 - calc2)
+    
+    # နောက်ဆုံးဂဏန်းကိုပဲယူခြင်း (ဥပမာ 15 ဆိုရင် 5 ကိုယူမယ်)
+    final_digit = diff % 10
+    
+    # BIG / SMALL သတ်မှတ်ခြင်း
+    side = "BIG" if final_digit >= 5 else "SMALL"
+    
+    # တွက်ထားတဲ့ ပုံစံကို Text ပြန်ထုတ်ပေးခြင်း
+    calc_str = f"[{n5}+9={calc1}] & [{n1}+{n10}={calc2}] ➔ |{calc1}-{calc2}| = {diff} ➔ {final_digit}"
+    
+    return side, calc_str
 
 def get_prediction(history_data, next_period):
     try:
+        # နောက်ဆုံးထွက်ထားတဲ့ပွဲစဉ်တွေကို အစဉ်လိုက်စီမယ်
         data_list = sorted(history_data, key=lambda x: int(x['issueNumber']), reverse=True)
         latest = data_list[0]
         
-        # Call the Javascript logic equivalent
-        side = algo_friend_strategy(data_list, next_period) 
+        # Custom Math Logic ကိုခေါ်သုံးမယ်
+        side, calc_str = algo_custom_math(data_list)
         
-        # Fallback to Random (like JS _generateRandomPrediction) if algo fails
         if side is None:
-            side = random.choice(["BIG", "SMALL"])
-            note = "Random Fallback"
+            side = "SKIP"
+            note = calc_str
         else:
-            note = f"Friend Strategy ({state['current_active_method']})"
+            note = calc_str
             
         conf = 100 
         
         return side, conf, note, latest.get('blockNumber')
     except Exception as e:
-        return None, 0, f"Error: {e}", None
+        return "SKIP", 0, f"Error: {e}", None
 
 # --- ၂။ STATS & UTILS ---
 
@@ -186,7 +145,8 @@ def build_live_msg(remaining_sec):
         
     msg += f"🍁ᴘᴇʀɪᴏᴅ: {curr['period_full'][-17:] if curr['period_full'] else '----'}\n"
     msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b> ({curr['conf']}%)\n"
-    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY"
+    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY\n\n"
+    msg += f"⚙️ <b>Logic Formula:</b>\n<code>{curr['note']}</code>"
 
     return msg
 
@@ -204,7 +164,7 @@ def build_loss_msg():
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
-    print("Bot starting with Pro-WinGo AI Friend Strategy Logic...")
+    print("Bot starting with Custom User Math Logic...")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     while True:
