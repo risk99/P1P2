@@ -1,11 +1,15 @@
 import telebot
 import requests
 import time
+import os
+import re
+import json
 from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ========== 
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
 CHANNEL_ID = '-1003957363150'
+GEMINI_API_KEY = 'AIzaSyC70DKqvTU4mGNOlNEr9f1UDai8njXS6QU' # ဤနေရာတွင် Gemini API Key ထည့်ပါ
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -30,61 +34,73 @@ state = {
 def get_mm_time():
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
-# --- ၁။ MAIN ALGORITHM (Custom Math Logic) ---
+# --- ၁။ MAIN ALGORITHM (Gemini AI Strategy) ---
 
-def algo_custom_math(history_list):
+def get_gemini_prediction(history_list):
     """
-    User တောင်းဆိုထားသော တွက်နည်းအတိုင်း တွက်ချက်ခြင်း:
-    - n1 = အပေါ်ဆုံးကဏန်း
-    - n5 = ၅ ခုမြောက်ကဏန်း
-    - n10 = အောက်ဆုံးကဏန်း (၁၀ ခုမြောက်)
+    Gemini API ကို အသုံးပြု၍ Prediction ယူခြင်း
     """
     if len(history_list) < 10:
-        return None, "Not enough data (Need 10 results)"
-    
-    # ဂဏန်းများဆွဲထုတ်ခြင်း
-    n1 = int(history_list[0]['number'])
-    n5 = int(history_list[4]['number'])
-    n10 = int(history_list[9]['number'])
-    
-    # တွက်ချက်ခြင်း
-    calc1 = n5 + 9
-    calc2 = n1 + n10
-    
-    # အချင်းချင်းနှုတ်ခြင်း (အနှုတ်မထွက်အောင် abs ခံထားသည်)
-    diff = abs(calc1 - calc2)
-    
-    # နောက်ဆုံးဂဏန်းကိုပဲယူခြင်း (ဥပမာ 15 ဆိုရင် 5 ကိုယူမယ်)
-    final_digit = diff % 10
-    
-    # BIG / SMALL သတ်မှတ်ခြင်း
-    side = "BIG" if final_digit >= 5 else "SMALL"
-    
-    # တွက်ထားတဲ့ ပုံစံကို Text ပြန်ထုတ်ပေးခြင်း
-    calc_str = f"[{n5}+9={calc1}] & [{n1}+{n10}={calc2}] ➔ |{calc1}-{calc2}| = {diff} ➔ {final_digit}"
-    
-    return side, calc_str
+        return None, 0, "Not enough data"
 
-def get_prediction(history_data, next_period):
+    # နောက်ဆုံးထွက်ခဲ့တဲ့ ဂဏန်း ၁၀ လုံးကို ယူမည်
+    last_10_numbers = [str(item.get('number')) for item in history_list[:10]]
+    numbers_str = ", ".join(last_10_numbers)
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    
+    prompt = (
+        f"Based on these last 10 TrxWinGo results (newest to oldest): {numbers_str}. "
+        "Predict if the next result will be BIG (5-9) or SMALL (0-4). "
+        "Reply strictly with JSON format: {\"side\": \"BIG\" or \"SMALL\", \"confidence\": 0-100}"
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    headers = {'Content-Type': 'application/json'}
+
     try:
-        # နောက်ဆုံးထွက်ထားတဲ့ပွဲစဉ်တွေကို အစဉ်လိုက်စီမယ်
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            text = data['candidates'][0]['content']['parts'][0]['text']
+            
+            # JSON Data ကို ရှာဖွေပြီး ထုတ်ယူမည် (re.DOTALL အသုံးပြုထား၍ line breaks ပါလည်း အလုပ်လုပ်ပါသည်)
+            json_match = re.search(r'\{.*?\}', text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group(0))
+                side = result.get("side", "").upper()
+                conf = int(result.get("confidence", 0))
+                
+                if side in ["BIG", "SMALL"]:
+                    return side, conf, "Gemini AI"
+                else:
+                    return "SKIP", 0, "Invalid side from Gemini"
+            else:
+                return "SKIP", 0, "No JSON found in Gemini response"
+        else:
+            print(f"Gemini API Error: {response.status_code} - {response.text}")
+            return "SKIP", 0, "Gemini API Error"
+            
+    except Exception as e:
+        print(f"Gemini Request Exception: {e}")
+        return "SKIP", 0, "Gemini Connection Error"
+
+def get_prediction(history_data):
+    try:
         data_list = sorted(history_data, key=lambda x: int(x['issueNumber']), reverse=True)
         latest = data_list[0]
         
-        # Custom Math Logic ကိုခေါ်သုံးမယ်
-        side, calc_str = algo_custom_math(data_list)
+        # Gemini API မှ prediction တောင်းမည်
+        side, conf, note = get_gemini_prediction(data_list) 
         
-        if side is None:
-            side = "SKIP"
-            note = calc_str
-        else:
-            note = calc_str
+        if side is None or side == "SKIP":
+            return "SKIP", 0, note, latest.get('blockNumber')
             
-        conf = 100 
-        
         return side, conf, note, latest.get('blockNumber')
     except Exception as e:
-        return "SKIP", 0, f"Error: {e}", None
+        return None, 0, f"Error: {e}", None
 
 # --- ၂။ STATS & UTILS ---
 
@@ -108,7 +124,7 @@ def build_live_msg(remaining_sec):
     win_rate = (state["total_wins"] / total * 100) if total > 0 else 0
     curr = state['current_prediction']
     
-    msg = f"<b>🍁GLOBAL TRX LIVE - WWC LABS</b>\n"
+    msg = f"<b>🤖 GEMINI AI TRX LIVE </b>\n"
     msg += f"🍁ʜɪꜱᴛᴏʀʏ: <b>W-{state['total_wins']} | L-{state['total_losses']}</b>\n"
     msg += f"🍁ᴡɪɴʀᴀᴛᴇ: <b>{win_rate:.1f}%</b> \n"    
     msg += f"🍁ᴛɪᴍᴇ ʀᴇᴍᴀɪɴɪɴɢ: <b>{remaining_sec}s</b>\n"
@@ -145,8 +161,7 @@ def build_live_msg(remaining_sec):
         
     msg += f"🍁ᴘᴇʀɪᴏᴅ: {curr['period_full'][-17:] if curr['period_full'] else '----'}\n"
     msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b> ({curr['conf']}%)\n"
-    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY\n\n"
-    msg += f"⚙️ <b>Logic Formula:</b>\n<code>{curr['note']}</code>"
+    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY"
 
     return msg
 
@@ -164,7 +179,7 @@ def build_loss_msg():
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
-    print("Bot starting with Custom User Math Logic...")
+    print("Bot starting with Gemini AI Logic...")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     while True:
@@ -177,9 +192,9 @@ def main_loop():
                 latest_p = sorted(state["history"].keys(), reverse=True)[0]
                 next_p = str(int(latest_p) + 1)
                 
+                # Period အသစ်ဖြစ်မှသာ Gemini API ကို ခေါ်မည် (API Limit မထိအောင်)
                 if state["current_prediction"]["period_full"] != next_p:
-                    # Pass next_p to prediction logic
-                    side, conf, note, b_num = get_prediction(list(state["history"].values()), next_p)
+                    side, conf, note, b_num = get_prediction(list(state["history"].values()))
                         
                     state["current_prediction"] = {
                         "period_full": next_p, 
@@ -215,7 +230,7 @@ def main_loop():
             else:
                 time.sleep(10)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error in main loop: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
