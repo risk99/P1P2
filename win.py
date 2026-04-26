@@ -1,11 +1,15 @@
 import telebot
 import requests
 import time
+import json
+import os
 from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ========== 
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
 CHANNEL_ID = '-1003957363150'
+
+STATE_FILE = 'bot_state.json' # ID တွေမှတ်ထားမယ့်ဖိုင်
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -26,56 +30,72 @@ state = {
     "current_prediction": {"period_full": None, "block": None, "side": None, "conf": 0, "note": "Processing..."}
 }
 
-# --- ၀။ TIMEZONE UTILS ---
+# --- ၀။ TIMEZONE UTILS & FILE UTILS ---
 def get_mm_time():
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
-# --- ၁။ MAIN ALGORITHM (GEMINI_FREQ Logic) ---
+def load_msg_ids():
+    """Restart ကျသွားရင် ID တွေမပျောက်အောင် ဖိုင်ထဲကနေ ပြန်ဖတ်မယ်"""
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                state["loss_msg_id"] = data.get("loss_msg_id")
+                state["live_msg_id"] = data.get("live_msg_id")
+    except Exception as e:
+        print(f"Error loading state: {e}")
+
+def save_msg_ids():
+    """Message အသစ်ပို့တိုင်း ID တွေကို ဖိုင်ထဲရေးမှတ်မယ်"""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({
+                "loss_msg_id": state["loss_msg_id"],
+                "live_msg_id": state["live_msg_id"]
+            }, f)
+    except Exception as e:
+        print(f"Error saving state: {e}")
+
+# --- ၁။ MAIN ALGORITHM (GEMINI_FREQ Logic - 20 Rounds) ---
 
 def algo_gemini_freq(history_list):
     """
     GEMINI_FREQ Logic:
-    နောက်ဆုံး (၁၀) ပွဲအတွင်း BIG နှင့် SMALL ထွက်ရှိမှု အကြိမ်အရေအတွက် (Frequency) ကို ရှာဖွေပြီး
-    အများဆုံးထွက်ရှိသော ဘက်ကို Prediction အဖြစ် သတ်မှတ်သည်။
+    နောက်ဆုံး (၂၀) ပွဲအတွင်း BIG နှင့် SMALL ထွက်ရှိမှု အကြိမ်အရေအတွက် ကို တွက်ချက်မည်။
     """
-    if len(history_list) < 10:
-        return None, "Not enough data (Need 10 results)"
+    lookback = 20 # အကြိမ်ရေ ၂၀ ကို ကြည့်မည်
     
-    recent_10 = history_list[:10]
+    if len(history_list) < lookback:
+        return None, f"Not enough data (Need {lookback} results)"
     
+    recent_data = history_list[:lookback]
     big_count = 0
     small_count = 0
     
-    # Frequency ရေတွက်ခြင်း
-    for item in recent_10:
+    for item in recent_data:
         num = int(item['number'])
         if num >= 5:
             big_count += 1
         else:
             small_count += 1
             
-    # အများဆုံးထွက်သော Size ကို ရွေးချယ်ခြင်း
     if big_count > small_count:
         side = "BIG"
     elif small_count > big_count:
         side = "SMALL"
     else:
-        # ၅ ပွဲစီ တူနေခဲ့လျှင် နောက်ဆုံးထွက်ခဲ့သော ပွဲစဉ်အတိုင်း ယူသည် (Tie Breaker)
-        last_num = int(recent_10[0]['number'])
+        # ၁၀ ပွဲစီ တူနေခဲ့လျှင် နောက်ဆုံးထွက်ခဲ့သော ပွဲစဉ်အတိုင်း ယူသည်
+        last_num = int(recent_data[0]['number'])
         side = "BIG" if last_num >= 5 else "SMALL"
         
-    # Result ကို Message တွင်ပြရန် စာသားတည်ဆောက်ခြင်း
-    calc_str = f"GEMINI_FREQ ➔ BIG: {big_count}/10 | SMALL: {small_count}/10 ➔ {side}"
-    
+    calc_str = f"GEMINI_FREQ ➔ BIG: {big_count}/{lookback} | SMALL: {small_count}/{lookback} ➔ {side}"
     return side, calc_str
 
 def get_prediction(history_data, next_period):
     try:
-        # နောက်ဆုံးထွက်ထားတဲ့ပွဲစဉ်တွေကို အစဉ်လိုက်စီမယ်
         data_list = sorted(history_data, key=lambda x: int(x['issueNumber']), reverse=True)
         latest = data_list[0]
         
-        # GEMINI_FREQ Logic ကိုခေါ်သုံးမယ်
         side, calc_str = algo_gemini_freq(data_list)
         
         if side is None:
@@ -85,7 +105,6 @@ def get_prediction(history_data, next_period):
             note = calc_str
             
         conf = 100 
-        
         return side, conf, note, latest.get('blockNumber')
     except Exception as e:
         return "SKIP", 0, f"Error: {e}", None
@@ -168,11 +187,15 @@ def build_loss_msg():
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
-    print("Bot starting with GEMINI_FREQ Logic...")
+    print("Bot starting with Anti-Duplicate GEMINI_FREQ (20 Rounds) Logic...")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
+    
+    # စစချင်းမှာ Save ထားတဲ့ ID တွေရှိလား ပြန်ခေါ်မယ်
+    load_msg_ids()
     
     while True:
         try:
+            # API မှ အချက်အလက်ယူခြင်း (pageSize=50 ဖြစ်၍ အပွဲ ၅၀ စာ ရရှိပါသည်)
             res = requests.get(f"{API_URL}?pageSize=50&pageNo=1&ts={int(time.time())}", headers=HEADERS, timeout=15)
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('list', [])
@@ -182,38 +205,42 @@ def main_loop():
                 next_p = str(int(latest_p) + 1)
                 
                 if state["current_prediction"]["period_full"] != next_p:
-                    # Pass next_p to prediction logic
                     side, conf, note, b_num = get_prediction(list(state["history"].values()), next_p)
-                        
-                    state["current_prediction"] = {
-                        "period_full": next_p, 
-                        "block": b_num,
-                        "side": side, 
-                        "conf": conf, 
-                        "note": note
-                    }
-                    
+                    state["current_prediction"] = {"period_full": next_p, "block": b_num, "side": side, "conf": conf, "note": note}
                     if side and side != "SKIP": 
                         state["predictions_memory"][next_p] = side
 
                 rem_sec = 60 - get_mm_time().second
                 
-                # Update Messages
+                # --- Loss Message Update ---
                 l_text = build_loss_msg()
                 if state["loss_msg_id"] is None:
                     m = bot.send_message(CHANNEL_ID, l_text, parse_mode='HTML')
                     state["loss_msg_id"] = m.message_id
+                    save_msg_ids()
                 else:
-                    try: bot.edit_message_text(l_text, CHANNEL_ID, state["loss_msg_id"], parse_mode='HTML')
-                    except: pass
+                    try:
+                        bot.edit_message_text(l_text, CHANNEL_ID, state["loss_msg_id"], parse_mode='HTML')
+                    except Exception as e:
+                        if "message to edit not found" in str(e).lower() or "message is not modified" not in str(e).lower():
+                            m = bot.send_message(CHANNEL_ID, l_text, parse_mode='HTML')
+                            state["loss_msg_id"] = m.message_id
+                            save_msg_ids()
 
+                # --- Live Message Update ---
                 v_text = build_live_msg(rem_sec)
                 if state["live_msg_id"] is None:
                     m = bot.send_message(CHANNEL_ID, v_text, parse_mode='HTML')
                     state["live_msg_id"] = m.message_id
+                    save_msg_ids()
                 else:
-                    try: bot.edit_message_text(v_text, CHANNEL_ID, state["live_msg_id"], parse_mode='HTML')
-                    except: pass
+                    try:
+                        bot.edit_message_text(v_text, CHANNEL_ID, state["live_msg_id"], parse_mode='HTML')
+                    except Exception as e:
+                        if "message to edit not found" in str(e).lower() or "message is not modified" not in str(e).lower():
+                            m = bot.send_message(CHANNEL_ID, v_text, parse_mode='HTML')
+                            state["live_msg_id"] = m.message_id
+                            save_msg_ids()
 
                 time.sleep(5)
             else:
