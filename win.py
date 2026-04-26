@@ -10,7 +10,7 @@ BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
 CHANNEL_ID = '-1003957363150'
 
 
-STATE_FILE = 'bot_state.json' # ID တွေမှတ်ထားမယ့်ဖိုင်
+STATE_FILE = 'bot_state.json' 
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -26,8 +26,8 @@ state = {
     "last_day": "",
     "loss_msg_id": None, 
     "live_msg_id": None, 
-    "last_loss_text": "", # Spam မဖြစ်အောင် စာသားပြောင်းမှပို့ရန်
-    "last_live_text": "", # Spam မဖြစ်အောင် စာသားပြောင်းမှပို့ရန်
+    "last_loss_text": "", 
+    "last_live_text": "", 
     "predictions_memory": {}, 
     "processed_periods": set(),
     "current_prediction": {"period_full": None, "block": None, "side": None, "conf": 0, "note": "Processing..."}
@@ -45,7 +45,7 @@ def load_msg_ids():
                 state["loss_msg_id"] = data.get("loss_msg_id")
                 state["live_msg_id"] = data.get("live_msg_id")
     except Exception as e:
-        print(f"Error loading state: {e}")
+        pass
 
 def save_msg_ids():
     try:
@@ -55,7 +55,7 @@ def save_msg_ids():
                 "live_msg_id": state["live_msg_id"]
             }, f)
     except Exception as e:
-        print(f"Error saving state: {e}")
+        pass
 
 # --- ၁။ PREDICTION ALGORITHM ---
 def algo_gemini_freq(history_list):
@@ -106,8 +106,8 @@ def update_loss_stats(streak):
         state["max_loss_data"][streak]["times"] += 1
         state["max_loss_data"][streak]["last_time"] = now.strftime("%I:%M %p")
 
-# --- ၃။ MESSAGE BUILDERS ---
-def build_live_msg(remaining_sec):
+# --- ၃။ MESSAGE BUILDERS (Timer ဖြုတ်လိုက်ပါပြီ) ---
+def build_live_msg():
     total = state["total_wins"] + state["total_losses"]
     win_rate = (state["total_wins"] / total * 100) if total > 0 else 0
     curr = state['current_prediction']
@@ -115,7 +115,7 @@ def build_live_msg(remaining_sec):
     msg = f"<b>🍁GLOBAL TRX LIVE - WWC LABS</b>\n"
     msg += f"🍁ʜɪꜱᴛᴏʀʏ: <b>W-{state['total_wins']} | L-{state['total_losses']}</b>\n"
     msg += f"🍁ᴡɪɴʀᴀᴛᴇ: <b>{win_rate:.1f}%</b> \n"    
-    msg += f"🍁ᴛɪᴍᴇ ʀᴇᴍᴀɪɴɪɴɢ: <b>{remaining_sec}s</b>\n"
+    msg += f"🍁ꜱᴛᴀᴛᴜꜱ: <b>🟢 Live Analysis</b>\n" # <--- Timer အစား ဒါထည့်လိုက်ပါပြီ
     
     table = "📄     Period Number     • Result   •  W/L •\n"
     sorted_hist = sorted(state["history"].values(), key=lambda x: int(x['issueNumber']), reverse=True)
@@ -162,7 +162,7 @@ def build_loss_msg():
 
 # --- ၄။ MAIN LOOP ---
 def main_loop():
-    print("Bot starting with Anti-Spam Fix (Reverse Mode Removed)...")
+    print("Bot starting... Rate Limit (Timer Edit) is Fixed!")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     load_msg_ids()
     
@@ -181,9 +181,7 @@ def main_loop():
                     state["current_prediction"] = {"period_full": next_p, "block": b_num, "side": side, "conf": conf, "note": note}
                     if side and side != "SKIP": state["predictions_memory"][next_p] = side
 
-                rem_sec = 60 - get_mm_time().second
-                
-                # --- UPDATE LOSS MESSAGE (စာပြောင်းမှသာ Edit လုပ်မည်) ---
+                # --- 1. UPDATE LOSS MESSAGE ---
                 l_text = build_loss_msg()
                 if state["loss_msg_id"] is None:
                     m = bot.send_message(CHANNEL_ID, l_text, parse_mode='HTML')
@@ -195,15 +193,14 @@ def main_loop():
                         bot.edit_message_text(l_text, CHANNEL_ID, state["loss_msg_id"], parse_mode='HTML')
                         state["last_loss_text"] = l_text
                     except Exception as e:
-                        err_str = str(e).lower()
-                        if "message to edit not found" in err_str:
+                        if "message to edit not found" in str(e).lower():
                             m = bot.send_message(CHANNEL_ID, l_text, parse_mode='HTML')
                             state["loss_msg_id"] = m.message_id
                             state["last_loss_text"] = l_text
                             save_msg_ids()
 
-                # --- UPDATE LIVE MESSAGE ---
-                v_text = build_live_msg(rem_sec)
+                # --- 2. UPDATE LIVE MESSAGE (၁ မိနစ် ၁ ခါသာ ပြောင်းမည်) ---
+                v_text = build_live_msg()
                 if state["live_msg_id"] is None:
                     m = bot.send_message(CHANNEL_ID, v_text, parse_mode='HTML')
                     state["live_msg_id"] = m.message_id
@@ -214,19 +211,19 @@ def main_loop():
                         bot.edit_message_text(v_text, CHANNEL_ID, state["live_msg_id"], parse_mode='HTML')
                         state["last_live_text"] = v_text
                     except Exception as e:
-                        err_str = str(e).lower()
-                        if "message to edit not found" in err_str:
+                        if "message to edit not found" in str(e).lower():
                             m = bot.send_message(CHANNEL_ID, v_text, parse_mode='HTML')
                             state["live_msg_id"] = m.message_id
                             state["last_live_text"] = v_text
                             save_msg_ids()
 
-                time.sleep(5)
+                # API Call မများစေရန် ၇ စက္ကန့်ခြားထားသည်
+                time.sleep(7) 
             else:
                 time.sleep(10)
         except Exception as e:
             print(f"Error in main loop: {e}")
-            time.sleep(5)
+            time.sleep(10)
 
 if __name__ == "__main__":
     main_loop()
