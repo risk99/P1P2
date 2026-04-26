@@ -5,7 +5,7 @@ import json
 import re
 import os
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
@@ -29,10 +29,6 @@ state = {
     "processed_periods": set(),
     "current_prediction": {"period_full": None, "side": None, "conf": 0, "note": "Processing..."}
 }
-
-# --- ၀။ TIMEZONE UTILS ---
-def get_mm_time():
-    return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
 # --- ၁။ PREDICTION ENGINE (GEMINI_FREQ - 20 Rounds) ---
 
@@ -87,7 +83,7 @@ def get_prediction(history_data):
 
 def update_loss_stats(streak):
     if streak <= 0: return
-    now = get_mm_time()
+    now = datetime.now()
     today = now.strftime("%d,%m,%Y")
     if state["last_day"] != today:
         state["max_loss_data"] = {}
@@ -116,12 +112,13 @@ def build_live_msg(remaining_sec):
     win_rate = (state["total_wins"] / total * 100) if total > 0 else 0
     curr_conf = state['current_prediction']['conf']
     
-    msg = f"<b>🍁GLOBAL TRX LIVE - WWC LABS</b>\n"
-    msg += f"🍁ʜɪꜱᴛᴏʀʏ: <b>W-{state['total_wins']} | L-{state['total_losses']}</b>\n"
-    msg += f"🍁ᴡɪɴʀᴀᴛᴇ: <b>{win_rate:.1f}%</b> \n"    
-    msg += f"🍁ᴛɪᴍᴇ ʀᴇᴍᴀɪɴɪɴɢ: <b>{remaining_sec}s</b>\n"
+    msg = f"<b>🍁 GLOBAL TRX -  MM</b>\n"
+    msg += f"🍁 HIT: <b>Win-{state['total_wins']}  ✺  Loss-{state['total_losses']}</b>\n"
+    msg += f"🍁 WinRate: <b>{win_rate:.1f}%</b> \n"    
+    msg += f"🍁 Next Result In: <b>{remaining_sec}s</b>\n"
     
-    table = "📄     Period Number     • Result   •  W/L •\n"
+    # --- History Copy Code Box ---
+    table = "✵ Period      ✵  Result     ✵  W/L ✵\n"
     
     sorted_hist = sorted(state["history"].values(), key=lambda x: int(x['issueNumber']), reverse=True)
     for item in sorted_hist[:10]:
@@ -142,16 +139,15 @@ def build_live_msg(remaining_sec):
                     state["total_losses"] += 1
                     state["current_loss_streak"] += 1
                     state["processed_periods"].add(p)
-        
-        # ERROR ဖြစ်နေသောလိုင်းကို ပြင်ဆင်ပြီးပါပြီ (actual_side အစား side ကိုသုံးထားသည်)
-        table += f"🍁 {p[-17:]}  •  {num}-{side[:1]}     • {wl:^3} •\n"
+        table += f"✺ {p[:3]}**{p[-4:]} • {num}-{side:<6} ✺ {wl:^3} ✺\n"
 
     msg += f"<pre>{table}</pre>"
-        
-    msg += f"🍁ᴘᴇʀɪᴏᴅ: {curr['period_full'][-17:] if curr['period_full'] else '----'}\n"
-    msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b> ({curr['conf']}%)\n"
-    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY\n\n"
-    msg += f"⚙️ <b>Logic Formula:</b>\n<code>{curr['note']}</code>"
+    # ---------------------------
+
+    pred_data = state['current_prediction']
+    msg += f"✺ Period: {pred_data['period_full'] if pred_data['period_full'] else '---'}\n"
+    msg += f"✺ Prediction: <b>{pred_data['side'] or 'WAITING'}</b> ({curr_conf}%)\n"
+    msg += f"✺ Signal Analysis: <i>{pred_data['note']}</i>\n"
 
     return msg
 
@@ -159,7 +155,7 @@ def build_live_msg(remaining_sec):
 
 def main_loop():
     print("Bot starting with GEMINI_FREQ Strategy...")
-    state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
+    state["last_day"] = datetime.now().strftime("%d,%m,%Y")
     while True:
         try:
             res = requests.get(f"{API_URL}?pageSize=50&pageNo=1&ts={int(time.time())}", headers=HEADERS, timeout=15)
@@ -175,7 +171,7 @@ def main_loop():
                     state["current_prediction"] = {"period_full": next_p, "side": side, "conf": conf, "note": note}
                     if side: state["predictions_memory"][next_p] = side
 
-                rem_sec = 60 - get_mm_time().second
+                rem_sec = 60 - datetime.now().second
                 
                 # Message 1
                 l_text = build_loss_msg()
