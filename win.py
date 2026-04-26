@@ -1,15 +1,11 @@
 import telebot
 import requests
 import time
-import os
-import re
-import json
 from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ========== 
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
 CHANNEL_ID = '-1003957363150'
-GEMINI_API_KEY = 'AIzaSyC70DKqvTU4mGNOlNEr9f1UDai8njXS6QU' # ဤနေရာတွင် Gemini API Key ထည့်ပါ
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -34,73 +30,65 @@ state = {
 def get_mm_time():
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
-# --- ၁။ MAIN ALGORITHM (Gemini AI Strategy) ---
+# --- ၁။ MAIN ALGORITHM (GEMINI_FREQ Logic) ---
 
-def get_gemini_prediction(history_list):
+def algo_gemini_freq(history_list):
     """
-    Gemini API ကို အသုံးပြု၍ Prediction ယူခြင်း
+    GEMINI_FREQ Logic:
+    နောက်ဆုံး (၁၀) ပွဲအတွင်း BIG နှင့် SMALL ထွက်ရှိမှု အကြိမ်အရေအတွက် (Frequency) ကို ရှာဖွေပြီး
+    အများဆုံးထွက်ရှိသော ဘက်ကို Prediction အဖြစ် သတ်မှတ်သည်။
     """
     if len(history_list) < 10:
-        return None, 0, "Not enough data"
-
-    # နောက်ဆုံးထွက်ခဲ့တဲ့ ဂဏန်း ၁၀ လုံးကို ယူမည်
-    last_10_numbers = [str(item.get('number')) for item in history_list[:10]]
-    numbers_str = ", ".join(last_10_numbers)
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+        return None, "Not enough data (Need 10 results)"
     
-    prompt = (
-        f"Based on these last 10 TrxWinGo results (newest to oldest): {numbers_str}. "
-        "Predict if the next result will be BIG (5-9) or SMALL (0-4). "
-        "Reply strictly with JSON format: {\"side\": \"BIG\" or \"SMALL\", \"confidence\": 0-100}"
-    )
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    headers = {'Content-Type': 'application/json'}
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            text = data['candidates'][0]['content']['parts'][0]['text']
-            
-            # JSON Data ကို ရှာဖွေပြီး ထုတ်ယူမည် (re.DOTALL အသုံးပြုထား၍ line breaks ပါလည်း အလုပ်လုပ်ပါသည်)
-            json_match = re.search(r'\{.*?\}', text, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group(0))
-                side = result.get("side", "").upper()
-                conf = int(result.get("confidence", 0))
-                
-                if side in ["BIG", "SMALL"]:
-                    return side, conf, "Gemini AI"
-                else:
-                    return "SKIP", 0, "Invalid side from Gemini"
-            else:
-                return "SKIP", 0, "No JSON found in Gemini response"
+    recent_10 = history_list[:10]
+    
+    big_count = 0
+    small_count = 0
+    
+    # Frequency ရေတွက်ခြင်း
+    for item in recent_10:
+        num = int(item['number'])
+        if num >= 5:
+            big_count += 1
         else:
-            print(f"Gemini API Error: {response.status_code} - {response.text}")
-            return "SKIP", 0, "Gemini API Error"
+            small_count += 1
             
-    except Exception as e:
-        print(f"Gemini Request Exception: {e}")
-        return "SKIP", 0, "Gemini Connection Error"
+    # အများဆုံးထွက်သော Size ကို ရွေးချယ်ခြင်း
+    if big_count > small_count:
+        side = "BIG"
+    elif small_count > big_count:
+        side = "SMALL"
+    else:
+        # ၅ ပွဲစီ တူနေခဲ့လျှင် နောက်ဆုံးထွက်ခဲ့သော ပွဲစဉ်အတိုင်း ယူသည် (Tie Breaker)
+        last_num = int(recent_10[0]['number'])
+        side = "BIG" if last_num >= 5 else "SMALL"
+        
+    # Result ကို Message တွင်ပြရန် စာသားတည်ဆောက်ခြင်း
+    calc_str = f"GEMINI_FREQ ➔ BIG: {big_count}/10 | SMALL: {small_count}/10 ➔ {side}"
+    
+    return side, calc_str
 
-def get_prediction(history_data):
+def get_prediction(history_data, next_period):
     try:
+        # နောက်ဆုံးထွက်ထားတဲ့ပွဲစဉ်တွေကို အစဉ်လိုက်စီမယ်
         data_list = sorted(history_data, key=lambda x: int(x['issueNumber']), reverse=True)
         latest = data_list[0]
         
-        # Gemini API မှ prediction တောင်းမည်
-        side, conf, note = get_gemini_prediction(data_list) 
+        # GEMINI_FREQ Logic ကိုခေါ်သုံးမယ်
+        side, calc_str = algo_gemini_freq(data_list)
         
-        if side is None or side == "SKIP":
-            return "SKIP", 0, note, latest.get('blockNumber')
+        if side is None:
+            side = "SKIP"
+            note = calc_str
+        else:
+            note = calc_str
             
+        conf = 100 
+        
         return side, conf, note, latest.get('blockNumber')
     except Exception as e:
-        return None, 0, f"Error: {e}", None
+        return "SKIP", 0, f"Error: {e}", None
 
 # --- ၂။ STATS & UTILS ---
 
@@ -124,7 +112,7 @@ def build_live_msg(remaining_sec):
     win_rate = (state["total_wins"] / total * 100) if total > 0 else 0
     curr = state['current_prediction']
     
-    msg = f"<b>🤖 GEMINI AI TRX LIVE </b>\n"
+    msg = f"<b>🍁GLOBAL TRX LIVE - WWC LABS</b>\n"
     msg += f"🍁ʜɪꜱᴛᴏʀʏ: <b>W-{state['total_wins']} | L-{state['total_losses']}</b>\n"
     msg += f"🍁ᴡɪɴʀᴀᴛᴇ: <b>{win_rate:.1f}%</b> \n"    
     msg += f"🍁ᴛɪᴍᴇ ʀᴇᴍᴀɪɴɪɴɢ: <b>{remaining_sec}s</b>\n"
@@ -161,7 +149,8 @@ def build_live_msg(remaining_sec):
         
     msg += f"🍁ᴘᴇʀɪᴏᴅ: {curr['period_full'][-17:] if curr['period_full'] else '----'}\n"
     msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b> ({curr['conf']}%)\n"
-    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY"
+    msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY\n\n"
+    msg += f"⚙️ <b>Logic Formula:</b>\n<code>{curr['note']}</code>"
 
     return msg
 
@@ -179,7 +168,7 @@ def build_loss_msg():
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
-    print("Bot starting with Gemini AI Logic...")
+    print("Bot starting with GEMINI_FREQ Logic...")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     while True:
@@ -192,9 +181,9 @@ def main_loop():
                 latest_p = sorted(state["history"].keys(), reverse=True)[0]
                 next_p = str(int(latest_p) + 1)
                 
-                # Period အသစ်ဖြစ်မှသာ Gemini API ကို ခေါ်မည် (API Limit မထိအောင်)
                 if state["current_prediction"]["period_full"] != next_p:
-                    side, conf, note, b_num = get_prediction(list(state["history"].values()))
+                    # Pass next_p to prediction logic
+                    side, conf, note, b_num = get_prediction(list(state["history"].values()), next_p)
                         
                     state["current_prediction"] = {
                         "period_full": next_p, 
@@ -230,7 +219,7 @@ def main_loop():
             else:
                 time.sleep(10)
         except Exception as e:
-            print(f"Error in main loop: {e}")
+            print(f"Error: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
