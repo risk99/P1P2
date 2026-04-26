@@ -185,7 +185,7 @@ def main_loop():
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     # Message IDs ကို File ထဲကနေ ပြန်ဖတ်မယ်
-    load_msg_ids()
+  
     
     while True:
         try:
