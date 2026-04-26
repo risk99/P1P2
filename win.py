@@ -138,8 +138,8 @@ def build_live_msg(remaining_sec):
                     state["total_losses"] += 1
                     state["current_loss_streak"] += 1
                     state["processed_periods"].add(p)
-        table += f"✺ {p[:3]}**{p[-4:]} • {num}-{side:<6} ✺ {wl:^3} ✺\n"
-        table += f"🍁 {p[-17:]}  •  {num}-{actual_side[:1]}     • {wl:^3} •\n"
+        
+        table += f"🍁 {p[-17:]}  •  {num}-{side[:1]}     • {wl:^3} •\n"
 
     msg += f"<pre>{table}</pre>"
         
