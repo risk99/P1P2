@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
 CHANNEL_ID = '-1003957363150'
 
-
+STATE_FILE = 'bot_state.json' # ID တွေမှတ်ထားမယ့်ဖိုင်
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -36,7 +36,27 @@ def get_mm_time():
     # မြန်မာစံတော်ချိန် (+6:30)
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
+def load_msg_ids():
+    """Restart ကျသွားရင် ID တွေမပျောက်အောင် ဖိုင်ထဲကနေ ပြန်ဖတ်မယ်"""
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                state["loss_msg_id"] = data.get("loss_msg_id")
+                state["live_msg_id"] = data.get("live_msg_id")
+    except Exception as e:
+        print(f"Error loading state: {e}")
 
+def save_msg_ids():
+    """Message အသစ်ပို့တိုင်း ID တွေကို ဖိုင်ထဲရေးမှတ်မယ်"""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({
+                "loss_msg_id": state["loss_msg_id"],
+                "live_msg_id": state["live_msg_id"]
+            }, f)
+    except Exception as e:
+        print(f"Error saving state: {e}")
 
 # --- ၁။ PREDICTION ALGORITHM (From gemini.py) ---
 
@@ -145,8 +165,8 @@ def build_live_msg(remaining_sec):
                     state["current_loss_streak"] += 1
                     
                     # ၃ ကြိမ်ဆက်တိုက်ရှုံးရင် Reverse Mode ကို ဖွင့်မယ် (မိမိလိုချင်သလို ပြောင်းနိုင်သည်)
-                    if state["current_loss_streak"] >= 1:
-                        state["is_reversed_mode"] = False
+                    if state["current_loss_streak"] >= 100000:
+                        state["is_reversed_mode"] = false
                         
                     state["processed_periods"].add(p)
         
@@ -185,7 +205,7 @@ def main_loop():
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     # Message IDs ကို File ထဲကနေ ပြန်ဖတ်မယ်
-  
+    load_msg_ids()
     
     while True:
         try:
