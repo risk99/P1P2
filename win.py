@@ -5,7 +5,7 @@ import json
 import re
 import os
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = '8616748168:AAH-KyOQHaMvGMO-nuYiekJcIo6zn351ihM'
@@ -29,6 +29,10 @@ state = {
     "processed_periods": set(),
     "current_prediction": {"period_full": None, "side": None, "conf": 0, "note": "Processing..."}
 }
+
+# --- ၀။ TIMEZONE UTILS ---
+def get_mm_time():
+    return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
 # --- ၁။ PREDICTION ENGINE (GEMINI_FREQ - 20 Rounds) ---
 
@@ -83,7 +87,7 @@ def get_prediction(history_data):
 
 def update_loss_stats(streak):
     if streak <= 0: return
-    now = datetime.now()
+    now = get_mm_time()
     today = now.strftime("%d,%m,%Y")
     if state["last_day"] != today:
         state["max_loss_data"] = {}
@@ -139,6 +143,7 @@ def build_live_msg(remaining_sec):
                     state["current_loss_streak"] += 1
                     state["processed_periods"].add(p)
         
+        # ERROR ဖြစ်နေသောလိုင်းကို ပြင်ဆင်ပြီးပါပြီ (actual_side အစား side ကိုသုံးထားသည်)
         table += f"🍁 {p[-17:]}  •  {num}-{side[:1]}     • {wl:^3} •\n"
 
     msg += f"<pre>{table}</pre>"
@@ -148,14 +153,13 @@ def build_live_msg(remaining_sec):
     msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY\n\n"
     msg += f"⚙️ <b>Logic Formula:</b>\n<code>{curr['note']}</code>"
 
-
     return msg
 
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
     print("Bot starting with GEMINI_FREQ Strategy...")
-    state["last_day"] = datetime.now().strftime("%d,%m,%Y")
+    state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     while True:
         try:
             res = requests.get(f"{API_URL}?pageSize=50&pageNo=1&ts={int(time.time())}", headers=HEADERS, timeout=15)
@@ -171,7 +175,7 @@ def main_loop():
                     state["current_prediction"] = {"period_full": next_p, "side": side, "conf": conf, "note": note}
                     if side: state["predictions_memory"][next_p] = side
 
-                rem_sec = 60 - datetime.now().second
+                rem_sec = 60 - get_mm_time().second
                 
                 # Message 1
                 l_text = build_loss_msg()
